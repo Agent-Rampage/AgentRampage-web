@@ -1,287 +1,359 @@
 
 import os
+import base64
 import streamlit as st
 from openai import OpenAI
-
-
-# -----------------------------------------
-# PAGE CONFIGURATION
-# -----------------------------------------
 
 st.set_page_config(
     page_title="Agent Rampage",
     page_icon="🤖",
-    layout="centered"
+    layout="wide"
 )
 
-
-# -----------------------------------------
-# CONFIGURATION
-# -----------------------------------------
+# ---------------- SETTINGS ----------------
 
 def get_setting(name, default=None):
-    """Read settings from Streamlit Secrets or environment variables."""
     try:
         value = st.secrets.get(name, default)
     except Exception:
         value = None
-
     return value or os.getenv(name, default)
 
 
 GROQ_API_KEY = get_setting("GROQ_API_KEY")
-GROQ_MODEL = get_setting(
-    "GROQ_MODEL",
-    "qwen/qwen3.8-27b"
-)
+GROQ_MODEL = get_setting("GROQ_MODEL", "qwen/qwen3.8-27b")
+GEMINI_API_KEY = get_setting("GEMINI_API_KEY")
 
-MAX_TOKENS = 800
-
-
-# -----------------------------------------
-# AGENT RAMPAGE IDENTITY
-# -----------------------------------------
+MAX_TOKENS = 700
+TTS_MODEL = "gemini-3.8-flash-tts"
+TTS_VOICE = "Fenrir"
 
 SYSTEM_PROMPT = """
-You are Agent Rampage, an AI assistant application created by Naman.
+You are Agent Rampage, a helpful AI assistant application.
 
-IDENTITY:
-- Your application name is Agent Rampage.
-- Your creator is Naman.
-- You are an independent AI assistant project.
-- Your language model is Qwen, developed by Alibaba Group.
-- You access the model through the Groq API.
-- You are not ChatGPT or an OpenAI product.
+Application creator: Naman.
+Underlying AI model: Qwen, developed by Alibaba Group.
+API provider: Groq.
 
-IMPORTANT IDENTITY RULES:
-- Never confuse the application creator with the model developer.
-- Never claim that Naman developed the underlying Qwen model.
-- Never claim that Groq created the Agent Rampage application.
+When asked who created you, explain that Agent Rampage
+was created by Naman and uses Qwen through Groq.
 
-If someone asks "Who made you?", answer:
-"I am Agent Rampage, an AI assistant application created by Naman.
-My AI intelligence is powered by Qwen, developed by Alibaba Group,
-and accessed through the Groq API."
-
-If someone asks "Who created your AI model?", explain that
-Qwen was developed by Alibaba Group.
-
-RESPONSE STYLE:
-- Use simple, natural language.
-- Be friendly, helpful and conversational.
-- Keep answers concise unless the user requests details.
-- Support English and Hinglish.
-- Do not unnecessarily mention your underlying model.
-- Avoid excessive Markdown formatting.
+Use simple, natural English or Hinglish.
+Keep answers concise unless more detail is requested.
+Use plain text. Avoid unnecessary Markdown and LaTeX.
+For physics numericals use:
+Given
+Formula
+Calculation
+Final Answer
 """
 
+# ---------------- SESSION STATE ----------------
 
-# -----------------------------------------
-# GROQ CLIENT
-# -----------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-client = None
+if "last_audio" not in st.session_state:
+    st.session_state.last_audio = None
 
-if GROQ_API_KEY:
-    client = OpenAI(
-        api_key=GROQ_API_KEY,
-        base_url="https://api.groq.com/openai/v1"
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = ""
+
+if "voice_enabled" not in st.session_state:
+    st.session_state.voice_enabled = True
+
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
+
+if "autoplay_audio" not in st.session_state:
+    st.session_state.autoplay_audio = False
+
+# ---------------- CLIENTS ----------------
+
+if not GROQ_API_KEY:
+    st.error("Groq API key is missing. Add it in Streamlit Secrets.")
+    st.stop()
+
+groq_client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
+
+# ---------------- GEMINI SPEECH ----------------
+
+def generate_speech(text):
+    if not GEMINI_API_KEY:
+        raise ValueError("Gemini API key is missing.")
+
+    from google import genai
+
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+    result = gemini_client.interactions.create(
+        model=TTS_MODEL,
+        input=text,
+        response_format={"type": "audio"},
+        generation_config={
+            "speech_config": [
+                {"voice": TTS_VOICE}
+            ]
+        }
+    )
+
+    return base64.b64decode(result.output_audio.data)
+
+
+# ---------------- AI RESPONSE ----------------
+
+def get_ai_response(messages):
+
+    api_messages = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT
+        }
+    ]
+
+    for message in messages:
+        if message.get("image_data"):
+
+            image_url = (
+                "data:"
+                + message["mime_type"]
+                + ";base64,"
+                + message["image_data"]
+            )
+
+            api_messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": message["content"]
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
+                        }
+                    }
+                ]
+            })
+
+        else:
+            api_messages.append({
+                "role": message["role"],
+                "content": message["content"]
+            })
+
+    response = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=api_messages,
+        max_tokens=MAX_TOKENS,
+        temperature=0.7
+    )
+
+    return response.choices[0].message.content or (
+        "I could not generate a response."
     )
 
 
-# -----------------------------------------
-# CUSTOM DESIGN
-# -----------------------------------------
+# ---------------- DESIGN ----------------
 
 st.markdown("""
 <style>
-
 .stApp {
-    background: #080d18;
+    background-color: #080d18;
     color: white;
 }
 
-.block-container {
-    max-width: 850px;
-    padding-top: 2rem;
+h1 {
+    color: #00ff88;
+    text-align: center;
 }
 
-h1, h2, h3, p, label {
-    color: white;
-}
-
-[data-testid="stChatMessage"] {
-    background-color: #111b2d;
-    border: 1px solid #263650;
-    border-radius: 15px;
-    padding: 12px;
-}
-
-[data-testid="stChatInput"] {
-    border-radius: 15px;
-}
-
-section[data-testid="stSidebar"] {
+[data-testid="stSidebar"] {
     background-color: #101827;
 }
 
+.stChatMessage {
+    border: 1px solid #263449;
+    border-radius: 12px;
+}
+
 .stButton button {
-    border-radius: 10px;
-    border: 1px solid #34445e;
+    border-radius: 9px;
+    border: 1px solid #00ff88;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
+st.title("🤖 AGENT RAMPAGE")
+st.caption("Your Personal AI Assistant")
 
-# -----------------------------------------
-# HEADER
-# -----------------------------------------
+# ---------------- SIDEBAR ----------------
 
-st.title("🤖 Agent Rampage")
+with st.sidebar:
 
-st.caption("Your AI assistant. Powered by Qwen through Groq.")
+    st.title("⚙️ Settings")
 
-st.divider()
+    st.write("AI Model:", GROQ_MODEL)
+    st.write("Speech Voice:", TTS_VOICE)
+
+    st.session_state.voice_enabled = st.toggle(
+        "🔊 Voice Output",
+        value=st.session_state.voice_enabled
+    )
+
+    st.divider()
+
+    if st.button("🔁 Replay Last Answer", use_container_width=True):
+        if st.session_state.last_audio:
+            st.session_state.autoplay_audio = True
+        else:
+            st.info("No previous audio available.")
+
+    if st.button("⏹️ Stop Speaking", use_container_width=True):
+        st.session_state.last_audio = None
+        st.session_state.autoplay_audio = False
+        st.rerun()
+
+    if st.session_state.last_audio:
+        st.audio(
+            st.session_state.last_audio,
+            format="audio/wav",
+            autoplay=st.session_state.autoplay_audio
+        )
+        st.session_state.autoplay_audio = False
+
+    st.divider()
+
+    if st.button("🗑️ Clear Chat", use_container_width=True):
+        st.session_state.messages = []
+        st.session_state.last_audio = None
+        st.session_state.last_answer = ""
+        st.session_state.autoplay_audio = False
+        st.rerun()
+
+    st.caption("Powered by Groq AI + Gemini TTS")
 
 
-# -----------------------------------------
-# CHAT HISTORY
-# -----------------------------------------
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
-
-# Display previous messages
+# ---------------- CHAT HISTORY ----------------
 
 for message in st.session_state.messages:
 
     with st.chat_message(message["role"]):
 
-        st.markdown(message["content"])
+        st.write(message["content"])
+
+        if message.get("image_data"):
+            image_bytes = base64.b64decode(message["image_data"])
+            st.image(image_bytes, use_container_width=True)
 
 
-# -----------------------------------------
-# API KEY CHECK
-# -----------------------------------------
+# ---------------- IMAGE UPLOAD ----------------
 
-if not GROQ_API_KEY:
+st.write("📷 Attach an image (optional)")
 
-    st.warning(
-        "Groq API key is missing. "
-        "Add GROQ_API_KEY in Streamlit Settings → Secrets."
-    )
+uploaded_image = st.file_uploader(
+    "Upload an image",
+    type=["png", "jpg", "jpeg"],
+    key=f"image_{st.session_state.uploader_key}"
+)
+
+if uploaded_image:
+    if uploaded_image.size > 10 * 1024 * 1024:
+        st.error("Image must be smaller than 10 MB.")
+        uploaded_image = None
+    else:
+        st.image(
+            uploaded_image,
+            caption="Image ready for Agent Rampage",
+            use_container_width=True
+        )
 
 
-# -----------------------------------------
-# CHAT INPUT
-# -----------------------------------------
+# ---------------- USER INPUT ----------------
 
-if prompt := st.chat_input(
-    "Message Agent Rampage...",
-    disabled=(client is None)
-):
+prompt = st.chat_input("Ask Agent Rampage anything...")
 
-    # Save user message
+if prompt:
 
-    st.session_state.messages.append({
+    image_data = None
+    mime_type = None
+
+    if uploaded_image:
+        image_data = base64.b64encode(
+            uploaded_image.getvalue()
+        ).decode("utf-8")
+
+        mime_type = uploaded_image.type
+
+    user_message = {
         "role": "user",
-        "content": prompt
-    })
+        "content": prompt,
+        "image_data": image_data,
+        "mime_type": mime_type
+    }
 
-    # Display user message
+    st.session_state.messages.append(user_message)
 
     with st.chat_message("user"):
-        st.markdown(prompt)
+        st.write(prompt)
 
-    # Generate AI response
+        if image_data:
+            st.image(
+                base64.b64decode(image_data),
+                use_container_width=True
+            )
 
     with st.chat_message("assistant"):
 
-        response_placeholder = st.empty()
-
         try:
+            with st.spinner("Agent Rampage is thinking..."):
 
-            api_messages = [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                }
-            ] + st.session_state.messages
+                answer = get_ai_response(
+                    st.session_state.messages
+                )
 
-            response = client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=api_messages,
-                temperature=0.7,
-                max_tokens=MAX_TOKENS
-            )
-
-            answer = response.choices[0].message.content
-
-            if not answer:
-                answer = "I couldn't generate a response. Please try again."
-
-            response_placeholder.markdown(answer)
-
-            # Save assistant response
+            st.write(answer)
 
             st.session_state.messages.append({
                 "role": "assistant",
                 "content": answer
             })
 
+            st.session_state.last_answer = answer
+            st.session_state.last_audio = None
+
+            # Generate speech if voice output is enabled
+            if st.session_state.voice_enabled:
+
+                try:
+                    with st.spinner("Generating Fenrir voice..."):
+
+                        audio = generate_speech(answer)
+
+                    st.session_state.last_audio = audio
+                    st.audio(
+                        audio,
+                        format="audio/wav",
+                        autoplay=True
+                    )
+
+                except Exception as speech_error:
+                    st.warning(
+                        "AI answer is ready, but speech generation "
+                        f"failed: {speech_error}"
+                    )
+
         except Exception as error:
 
-            response_placeholder.error(
-                "Agent Rampage encountered an API error."
-            )
+            st.error(f"API Error: {error}")
 
-            st.caption(
-                "Check your API key, model name and Groq account limits."
-            )
-
-            st.error(str(error))
-
-            # Remove the unanswered user message
-            # so it can be retried cleanly.
-
-            if (
-                st.session_state.messages
-                and st.session_state.messages[-1]["role"] == "user"
-            ):
+            # Remove failed user request from history
+            if st.session_state.messages:
                 st.session_state.messages.pop()
 
-
-# -----------------------------------------
-# SIDEBAR
-# -----------------------------------------
-
-with st.sidebar:
-
-    st.title("⚙️ Settings")
-
-    st.write("🤖 Agent Rampage")
-
-    st.write("AI Model:", GROQ_MODEL)
-
-    st.divider()
-
-    if st.button("🗑️ Clear Chat", use_container_width=True):
-
-        st.session_state.messages = []
-
-        st.rerun()
-
-    st.divider()
-
-    st.caption("Powered by Groq AI")
-
-    st.caption("AI model: Qwen")
-
-    st.caption("Created by Naman")
-
-
-# -----------------------------------------
-# END OF APPLICATION
-# -----------------------------------------
+    st.session_state.uploader_key += 1

@@ -25,7 +25,7 @@ GROQ_MODEL = get_setting("GROQ_MODEL", "qwen/qwen3.8-27b")
 GEMINI_API_KEY = get_setting("GEMINI_API_KEY")
 
 MAX_TOKENS = 700
-TTS_MODEL = "gemini-3.8-flash-tts"
+TTS_MODEL = "gemini-3.1-flash-tts-preview"
 TTS_VOICE = "Fenrir"
 
 SYSTEM_PROMPT = """
@@ -95,13 +95,15 @@ def generate_speech(text):
         response_format={"type": "audio"},
         generation_config={
             "speech_config": [
-                {"voice": TTS_VOICE}
+                {"voice": "Fenrir"}
             ]
         }
     )
 
-    return base64.b64decode(result.output_audio.data)
+    if not result.output_audio or not result.output_audio.data:
+        raise ValueError("Gemini returned no audio.")
 
+    return base64.b64decode(result.output_audio.data)
 
 # ---------------- AI RESPONSE ----------------
 

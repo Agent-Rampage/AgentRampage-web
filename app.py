@@ -1,8 +1,7 @@
-
-import os
-import base64
-import streamlit as st
-from openai import OpenAI
+import io
+import wave
+from google import genai
+from google.genai import types
 
 st.set_page_config(
     page_title="Agent Rampage",
@@ -25,7 +24,7 @@ GROQ_MODEL = get_setting("GROQ_MODEL", "qwen/qwen3.8-27b")
 GEMINI_API_KEY = get_setting("GEMINI_API_KEY")
 
 MAX_TOKENS = 700
-TTS_MODEL = "gemini-3.1-flash-tts-preview"
+TTS_MODEL = "gemini-3.8-flash-tts"
 TTS_VOICE = "Fenrir"
 
 SYSTEM_PROMPT = """
@@ -81,29 +80,49 @@ groq_client = OpenAI(
 
 # ---------------- GEMINI SPEECH ----------------
 
+
 def generate_speech(text):
+
     if not GEMINI_API_KEY:
         raise ValueError("Gemini API key is missing.")
 
-    from google import genai
-
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
-    result = gemini_client.interactions.create(
-        model=TTS_MODEL,
-        input=text,
-        response_format={"type": "audio"},
-        generation_config={
-            "speech_config": [
-                {"voice": "Fenrir"}
-            ]
-        }
+    gemini_client = genai.Client(
+        api_key=GEMINI_API_KEY
     )
 
-    if not result.output_audio or not result.output_audio.data:
-        raise ValueError("Gemini returned no audio.")
+    response = gemini_client.models.generate_content(
+        model=TTS_MODEL,
+        contents=text,
+        config=types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            speech_config=types.SpeechConfig(
+                voice_config=types.VoiceConfig(
+                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                        voice_name=TTS_VOICE
+                    )
+                )
+            )
+        )
+    )
 
-    return base64.b64decode(result.output_audio.data)
+    for part in response.parts:
+
+        if part.inline_data and part.inline_data.data:
+
+            pcm_data = part.inline_data.data
+
+            # Convert raw audio into a WAV file
+            audio_buffer = io.BytesIO()
+
+            with wave.open(audio_buffer, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(24000)
+                wav_file.writeframes(pcm_data)
+
+            return audio_buffer.getvalue()
+
+    raise ValueError("Gemini returned no audio data.")
 
 # ---------------- AI RESPONSE ----------------
 

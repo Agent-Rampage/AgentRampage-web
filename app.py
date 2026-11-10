@@ -86,24 +86,30 @@ groq_client = OpenAI(
 # ---------------- GEMINI SPEECH ----------------
 
 
+
 def generate_speech(text):
 
     if not GEMINI_API_KEY:
         raise ValueError("Gemini API key is missing.")
+
+    from google import genai
+    from google.genai import types
+    import io
+    import wave
 
     gemini_client = genai.Client(
         api_key=GEMINI_API_KEY
     )
 
     response = gemini_client.models.generate_content(
-        model=TTS_MODEL,
+        model="gemini-3.1-flash-tts-preview",
         contents=text,
         config=types.GenerateContentConfig(
             response_modalities=["AUDIO"],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                        voice_name=TTS_VOICE
+                        voice_name="Fenrir"
                     )
                 )
             )
@@ -111,12 +117,9 @@ def generate_speech(text):
     )
 
     for part in response.parts:
-
         if part.inline_data and part.inline_data.data:
 
             pcm_data = part.inline_data.data
-
-            # Convert raw audio into a WAV file
             audio_buffer = io.BytesIO()
 
             with wave.open(audio_buffer, "wb") as wav_file:
@@ -127,7 +130,8 @@ def generate_speech(text):
 
             return audio_buffer.getvalue()
 
-    raise ValueError("Gemini returned no audio data.")
+    raise ValueError("No audio was returned by Gemini.")
+
 
 # ---------------- AI RESPONSE ----------------
 

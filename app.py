@@ -105,4 +105,3 @@ with st.sidebar:
         st.rerun()
 
     st.caption("Powered by Groq AI")
-s
